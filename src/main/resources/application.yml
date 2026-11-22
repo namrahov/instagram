@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: instagram
+  datasource:
+    url: jdbc:postgresql://localhost:5433/instagram
+    username: postgres
+    password: Genius33Frozen
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.time_zone: UTC
