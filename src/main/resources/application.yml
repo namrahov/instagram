@@ -73,6 +73,13 @@ instagram:
     access-key: ${MINIO_ACCESS_KEY:instagram}
     secret-key: ${MINIO_SECRET_KEY:instagram-local-secret}
     bucket: ${MINIO_BUCKET:instagram}
+  likes:
+    counter:
+      # Section 10/11: how often queued like/unlike changes are added up into post_like_counts. Also how far the
+      # shown count may trail the real one.
+      interval: ${LIKES_COUNTER_INTERVAL:PT1S}
+      # Queued changes per transaction: one UPDATE per post per batch.
+      batch-size: ${LIKES_COUNTER_BATCH_SIZE:1000}
   cdn:
     # Section 8: playbackUrl host. Locally the nginx cache in front of MinIO (docker-compose.yml, service cdn).
     base-url: ${CDN_BASE_URL:http://localhost:8090}
