@@ -46,5 +46,15 @@ instagram:
     upload-url-ttl: ${MEDIA_UPLOAD_URL_TTL:15m}
     download-url-ttl: ${MEDIA_DOWNLOAD_URL_TTL:15m}
     max-image-size: ${MEDIA_MAX_IMAGE_SIZE:20MB}
-    # Single PUT limit. Bigger videos need multipart upload (section 3).
-    max-video-size: ${MEDIA_MAX_VIDEO_SIZE:100MB}
+    max-video-size: ${MEDIA_MAX_VIDEO_SIZE:1GB}
+    # Files above this are uploaded in parts (section 3): a lost connection only costs the unfinished part.
+    multipart-threshold: ${MEDIA_MULTIPART_THRESHOLD:100MB}
+    # Small enough to re-send cheaply on a mobile network; S3 needs at least 5MB.
+    multipart-part-size: ${MEDIA_MULTIPART_PART_SIZE:10MB}
+    # A multipart upload may be resumed until this long after it started.
+    multipart-session-ttl: ${MEDIA_MULTIPART_SESSION_TTL:24h}
+    cleanup:
+      # ISO-8601 duration: how often unfinished uploads past their deadline are discarded.
+      interval: ${MEDIA_CLEANUP_INTERVAL:PT10M}
+      grace: ${MEDIA_CLEANUP_GRACE:1h}
+      batch-size: ${MEDIA_CLEANUP_BATCH_SIZE:100}
