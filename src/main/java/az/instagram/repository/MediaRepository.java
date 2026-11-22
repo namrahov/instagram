@@ -4,8 +4,10 @@ import az.instagram.entity.MediaEntity;
 import az.instagram.entity.MediaStatus;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -41,4 +43,27 @@ public interface MediaRepository extends JpaRepository<MediaEntity, Long> {
             """)
     int markRejected(@Param("id") long id, @Param("reason") String reason,
                      @Param("pending") MediaStatus pending, @Param("rejected") MediaStatus rejected);
+
+    /**
+     * PENDING_UPLOAD → {@code terminal} (ABORTED or EXPIRED). Returns 0 if the upload already finished or was
+     * already discarded, so cancel, cleanup and complete never both "win" for the same row.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update MediaEntity m
+               set m.status = :terminal
+             where m.id = :id and m.status = :pending
+            """)
+    int markDiscarded(@Param("id") long id, @Param("pending") MediaStatus pending,
+                      @Param("terminal") MediaStatus terminal);
+
+    /** Oldest unfinished uploads whose deadline passed before {@code before}. Uses idx_media_pending_expiry. */
+    @Query("""
+            select m from MediaEntity m
+             where m.status = :pending and m.uploadExpiresAt < :before
+             order by m.uploadExpiresAt
+            """)
+    List<MediaEntity> findStalePending(@Param("pending") MediaStatus pending, @Param("before") Instant before,
+                                       Limit limit);
 }

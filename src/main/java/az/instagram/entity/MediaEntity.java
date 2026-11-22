@@ -54,16 +54,31 @@ public class MediaEntity {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    /** When the presigned upload URL stops working. */
+    /**
+     * Single PUT: when the presigned URL stops working.
+     * Multipart: when the whole upload session ends; part URLs are issued on demand until then.
+     */
     @Column(name = "upload_expires_at", nullable = false, updatable = false)
     private Instant uploadExpiresAt;
 
     @Column(name = "uploaded_at")
     private Instant uploadedAt;
 
+    /** Storage-side multipart upload id. Null for a single PUT upload. Never sent to the client. */
+    @Column(name = "upload_id", updatable = false)
+    private String uploadId;
+
+    /** Size of every part except the last one, which holds the remainder. */
+    @Column(name = "part_size_bytes", updatable = false)
+    private Long partSizeBytes;
+
+    @Column(name = "part_count", updatable = false)
+    private Integer partCount;
+
     protected MediaEntity() {
     }
 
+    /** Single PUT upload. */
     public MediaEntity(long userId, MediaFormat format, long declaredSizeBytes, String objectKey,
                        Instant createdAt, Instant uploadExpiresAt) {
         this.userId = userId;
@@ -74,6 +89,41 @@ public class MediaEntity {
         this.status = MediaStatus.PENDING_UPLOAD;
         this.createdAt = createdAt;
         this.uploadExpiresAt = uploadExpiresAt;
+    }
+
+    /** Multipart upload. */
+    public static MediaEntity multipart(long userId, MediaFormat format, long declaredSizeBytes, String objectKey,
+                                        Instant createdAt, Instant sessionExpiresAt,
+                                        String uploadId, long partSizeBytes, int partCount) {
+        MediaEntity media = new MediaEntity(userId, format, declaredSizeBytes, objectKey, createdAt, sessionExpiresAt);
+        media.uploadId = uploadId;
+        media.partSizeBytes = partSizeBytes;
+        media.partCount = partCount;
+        return media;
+    }
+
+    public boolean isMultipart() {
+        return uploadId != null;
+    }
+
+    /** Exact size part {@code partNumber} (1-based) must have. */
+    public long expectedPartSize(int partNumber) {
+        if (partNumber < partCount) {
+            return partSizeBytes;
+        }
+        return declaredSizeBytes - partSizeBytes * (partCount - 1);
+    }
+
+    public String getUploadId() {
+        return uploadId;
+    }
+
+    public Long getPartSizeBytes() {
+        return partSizeBytes;
+    }
+
+    public Integer getPartCount() {
+        return partCount;
     }
 
     public Long getId() {
