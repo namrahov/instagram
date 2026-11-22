@@ -64,6 +64,10 @@ public class MediaEntity {
     @Column(name = "uploaded_at")
     private Instant uploadedAt;
 
+    /** When transcoding finished (READY) or gave up (FAILED). */
+    @Column(name = "processed_at")
+    private Instant processedAt;
+
     /** Storage-side multipart upload id. Null for a single PUT upload. Never sent to the client. */
     @Column(name = "upload_id", updatable = false)
     private String uploadId;
@@ -112,6 +116,10 @@ public class MediaEntity {
             return partSizeBytes;
         }
         return declaredSizeBytes - partSizeBytes * (partCount - 1);
+    }
+
+    public Instant getProcessedAt() {
+        return processedAt;
     }
 
     public String getUploadId() {

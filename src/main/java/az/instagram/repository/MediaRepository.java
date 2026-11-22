@@ -19,19 +19,55 @@ public interface MediaRepository extends JpaRepository<MediaEntity, Long> {
     Optional<MediaEntity> findByIdAndUserId(long id, long userId);
 
     /**
-     * PENDING_UPLOAD → UPLOADED. The status condition makes it safe when two complete calls race:
-     * only one of them changes the row (returns 1), the other gets 0.
+     * PENDING_UPLOAD → {@code verified} (UPLOADED for a video, READY for an image). The status condition makes it
+     * safe when two complete calls race: only one of them changes the row (returns 1), the other gets 0.
      */
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update MediaEntity m
-               set m.status = :uploaded, m.sizeBytes = :sizeBytes, m.etag = :etag, m.uploadedAt = :uploadedAt
+               set m.status = :verified, m.sizeBytes = :sizeBytes, m.etag = :etag, m.uploadedAt = :uploadedAt
              where m.id = :id and m.status = :pending
             """)
-    int markUploaded(@Param("id") long id, @Param("sizeBytes") long sizeBytes, @Param("etag") String etag,
+    int markVerified(@Param("id") long id, @Param("sizeBytes") long sizeBytes, @Param("etag") String etag,
                      @Param("uploadedAt") Instant uploadedAt,
-                     @Param("pending") MediaStatus pending, @Param("uploaded") MediaStatus uploaded);
+                     @Param("pending") MediaStatus pending, @Param("verified") MediaStatus verified);
+
+    /**
+     * UPLOADED → PROCESSING. Also matches PROCESSING: a redelivered event after a worker crash continues the job.
+     *
+     * @return 0 if the video is not waiting for processing (already READY/FAILED, or unknown)
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update MediaEntity m
+               set m.status = az.instagram.entity.MediaStatus.PROCESSING
+             where m.id = :id
+               and m.status in (az.instagram.entity.MediaStatus.UPLOADED, az.instagram.entity.MediaStatus.PROCESSING)
+            """)
+    int startProcessing(@Param("id") long id);
+
+    /** PROCESSING → READY. */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update MediaEntity m
+               set m.status = az.instagram.entity.MediaStatus.READY, m.processedAt = :at
+             where m.id = :id and m.status = az.instagram.entity.MediaStatus.PROCESSING
+            """)
+    int markReady(@Param("id") long id, @Param("at") Instant at);
+
+    /** UPLOADED/PROCESSING → FAILED, after the retries ran out. A READY video is never downgraded. */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update MediaEntity m
+               set m.status = az.instagram.entity.MediaStatus.FAILED, m.failureReason = :reason, m.processedAt = :at
+             where m.id = :id
+               and m.status in (az.instagram.entity.MediaStatus.UPLOADED, az.instagram.entity.MediaStatus.PROCESSING)
+            """)
+    int markFailed(@Param("id") long id, @Param("reason") String reason, @Param("at") Instant at);
 
     /** PENDING_UPLOAD → REJECTED, same race-safety as {@link #markUploaded}. */
     @Transactional
