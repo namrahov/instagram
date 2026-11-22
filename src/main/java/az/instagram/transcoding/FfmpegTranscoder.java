@@ -2,6 +2,7 @@ package az.instagram.transcoding;
 
 import az.instagram.config.TranscodingProperties;
 import az.instagram.exception.InvalidVideoException;
+import az.instagram.exception.LeaseLostException;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -11,6 +12,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +42,7 @@ public class FfmpegTranscoder {
         String output = run(List.of(props.ffprobePath(), "-v", "error", "-select_streams", "v:0",
                         "-show_entries", "stream=width,height:stream_side_data=rotation", "-of", "csv=p=0:s=,",
                         file.toString()),
-                file.resolveSibling(file.getFileName() + ".probe.log"), true);
+                file.resolveSibling(file.getFileName() + ".probe.log"), true, () -> true);
         String[] fields = output.strip().split("[,\\s]+");
         if (fields.length < 2 || fields[0].isEmpty()) {
             throw new InvalidVideoException("No video stream found");
@@ -56,8 +58,11 @@ public class FfmpegTranscoder {
      * Writes an H.264/AAC MP4 whose shorter side is {@code shortSide} pixels ("720p" means 720 on the short side, so
      * a portrait video stays portrait). {@code +faststart} puts the index first so playback can start before the
      * whole file is downloaded.
+     *
+     * @param keepGoing checked every second while ffmpeg runs; when it turns false (the lease was lost) ffmpeg is
+     *                  killed and {@link LeaseLostException} is thrown, so a fenced-off worker stops burning CPU
      */
-    public void transcode(Path source, Path target, int shortSide) {
+    public void transcode(Path source, Path target, int shortSide, BooleanSupplier keepGoing) {
         String scale = "scale='if(gt(iw,ih),-2,%1$d)':'if(gt(iw,ih),%1$d,-2)'".formatted(shortSide);
         run(List.of(props.ffmpegPath(), "-y", "-hide_banner", "-loglevel", "error",
                         "-i", source.toString(),
@@ -66,11 +71,11 @@ public class FfmpegTranscoder {
                         "-c:a", "aac", "-b:a", "128k",
                         "-movflags", "+faststart",
                         target.toString()),
-                target.resolveSibling(target.getFileName() + ".log"), false);
+                target.resolveSibling(target.getFileName() + ".log"), false, keepGoing);
     }
 
     /** Runs a command, returns its stdout. Output goes to a file, so a chatty process can never block on a full pipe. */
-    private String run(List<String> command, Path log, boolean invalidInputOnFailure) {
+    private String run(List<String> command, Path log, boolean invalidInputOnFailure, BooleanSupplier keepGoing) {
         Process process;
         try {
             process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
@@ -78,9 +83,16 @@ public class FfmpegTranscoder {
             throw new UncheckedIOException("Cannot start " + command.getFirst(), e);
         }
         try {
-            if (!process.waitFor(props.timeout().toMillis(), TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly();
-                throw new IllegalStateException(command.getFirst() + " timed out after " + props.timeout());
+            long deadline = System.nanoTime() + props.timeout().toNanos();
+            while (!process.waitFor(1, TimeUnit.SECONDS)) {
+                if (!keepGoing.getAsBoolean()) {
+                    process.destroyForcibly();
+                    throw new LeaseLostException("Lease lost, " + Path.of(command.getFirst()).getFileName() + " stopped");
+                }
+                if (System.nanoTime() > deadline) {
+                    process.destroyForcibly();
+                    throw new IllegalStateException(command.getFirst() + " timed out after " + props.timeout());
+                }
             }
             String output = Files.readString(log, StandardCharsets.UTF_8);
             if (process.exitValue() != 0) {

@@ -7,6 +7,7 @@ import az.instagram.entity.MediaFormat;
 import az.instagram.entity.MediaStatus;
 import az.instagram.entity.MediaType;
 import az.instagram.entity.MediaVariantEntity;
+import az.instagram.entity.VariantStatus;
 import az.instagram.repository.MediaRepository;
 import az.instagram.repository.MediaVariantRepository;
 import az.instagram.storage.ObjectStorage;
@@ -252,7 +253,7 @@ public class MediaUploadService {
         if (entity.getMediaType() != MediaType.VIDEO || entity.getStatus() != MediaStatus.READY) {
             return List.of();
         }
-        return variants.findByMediaIdOrderByHeight(entity.getId()).stream()
+        return variants.findByMediaIdAndStatusOrderByShortSide(entity.getId(), VariantStatus.COMPLETED).stream()
                 .map(v -> new VariantView(v, storage.presignGet(v.getObjectKey(), props.downloadUrlTtl())))
                 .toList();
     }

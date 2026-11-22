@@ -140,6 +140,13 @@ public class ObjectStorage {
         s3.deleteObject(d -> d.bucket(bucket).key(key));
     }
 
+    /** Every key under {@code prefix} (paginated by the SDK). */
+    public List<String> listKeys(String prefix) {
+        List<String> keys = new ArrayList<>();
+        s3.listObjectsV2Paginator(l -> l.bucket(bucket).prefix(prefix)).contents().forEach(o -> keys.add(o.key()));
+        return keys;
+    }
+
     /** Streams the object to a local file (which must not exist yet). Used by workers, not by the API. */
     public void download(String key, Path target) {
         s3.getObject(g -> g.bucket(bucket).key(key), ResponseTransformer.toFile(target));
