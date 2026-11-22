@@ -11,3 +11,40 @@ spring:
       ddl-auto: validate
     properties:
       hibernate.jdbc.time_zone: UTC
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yml
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  # 8080 is taken by the twitter app.
+  port: ${SERVER_PORT:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+instagram:
+  storage:
+    # The backend talks to MinIO/S3 through this address.
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    # Presigned URLs are signed for this host, so it must be the address the mobile client can reach.
+    # In production it differs from the internal endpoint (e.g. https://media.example.com vs http://minio:9000).
+    public-endpoint: ${MINIO_PUBLIC_ENDPOINT:http://localhost:9000}
+    region: ${MINIO_REGION:us-east-1}
+    access-key: ${MINIO_ACCESS_KEY:ecis-local}
+    secret-key: ${MINIO_SECRET_KEY:ecis-local-minio-secret-2026}
+    bucket: ${MINIO_BUCKET:penitentiary-dev}
+  media:
+    # How long the client may use the upload URL. Short, so a leaked URL is useless soon.
+    upload-url-ttl: ${MEDIA_UPLOAD_URL_TTL:15m}
+    download-url-ttl: ${MEDIA_DOWNLOAD_URL_TTL:15m}
+    max-image-size: ${MEDIA_MAX_IMAGE_SIZE:20MB}
+    # Single PUT limit. Bigger videos need multipart upload (section 3).
+    max-video-size: ${MEDIA_MAX_VIDEO_SIZE:100MB}
