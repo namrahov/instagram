@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: instagram
+---
+# Non-secret settings shared by API and worker pods. Secrets come from k8s/.env (see kustomization.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: instagram-config
+  namespace: instagram
+data:
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres.instagram.svc.cluster.local:5432/instagram
+  SPRING_DATASOURCE_USERNAME: instagram
+  KAFKA_BOOTSTRAP_SERVERS: kafka.kafka.svc.cluster.local:9092
+  # Partitions cap parallel workers (= KEDA maxReplicaCount). The app creates/extends the topic on startup.
+  VIDEO_PROCESSING_PARTITIONS: "100"
+  VIDEO_PROCESSING_REPLICAS: "3"
+  MINIO_ENDPOINT: http://minio.instagram.svc.cluster.local:9000
+  # What mobile clients reach; presigned URLs are signed for this host.
+  MINIO_PUBLIC_ENDPOINT: https://media.example.com
+  MINIO_BUCKET: instagram-media

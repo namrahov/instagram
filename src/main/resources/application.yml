@@ -28,6 +28,14 @@ spring:
     consumer:
       # A new consumer group starts from the beginning, so no event published before it existed is skipped.
       auto-offset-reset: earliest
+      properties:
+        # Every KEDA scale-up/down is a group rebalance. With the default (eager) assignor all consumers stop and
+        # hand back every partition; with cooperative-sticky only the partitions that must move are revoked, so
+        # workers in the middle of a transcode keep going.
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+  lifecycle:
+    # On shutdown (e.g. KEDA scaling down) wait this long for running work. Must be >= video-worker.shutdown-timeout.
+    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}
 
 server:
   # 8080 is taken by the twitter app.
@@ -43,6 +51,18 @@ management:
       show-details: never
 
 instagram:
+  kafka:
+    video-processing:
+      # Upper bound on parallel video workers in one consumer group (section 5). 3 locally; k8s uses 100.
+      partitions: ${VIDEO_PROCESSING_PARTITIONS:3}
+      replicas: ${VIDEO_PROCESSING_REPLICAS:1}
+  video-worker:
+    # false on API pods: they only publish events; the video-worker deployment consumes them.
+    enabled: ${VIDEO_WORKER_ENABLED:true}
+    # Kafka consumers in this process. 1 per pod on k8s, so one pod = one partition and KEDA's math holds.
+    concurrency: ${VIDEO_WORKER_CONCURRENCY:3}
+    # On shutdown, how long the worker may finish the job in hand before the record is left for another pod.
+    shutdown-timeout: ${VIDEO_WORKER_SHUTDOWN_TIMEOUT:30s}
   storage:
     # The backend talks to MinIO/S3 through this address.
     endpoint: ${MINIO_ENDPOINT:http://localhost:9000}

@@ -1,0 +1,87 @@
+# Pods that only transcode: Kafka consumer on, one consumer per pod. KEDA (video-worker-scaledobject.yaml)
+# decides how many run. No Service: nothing calls them; the HTTP port only serves health probes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: video-worker
+  namespace: instagram
+  labels:
+    app: instagram
+    component: video-worker
+spec:
+  # No "replicas": the HPA created by KEDA owns that number. Setting it here would fight the autoscaler.
+  selector:
+    matchLabels:
+      app: instagram
+      component: video-worker
+  template:
+    metadata:
+      labels:
+        app: instagram
+        component: video-worker
+    spec:
+      # Scale-down sends SIGTERM; the worker may finish the job in hand for up to 20 min
+      # (VIDEO_WORKER_SHUTDOWN_TIMEOUT), then Spring shuts down. Kubernetes must not SIGKILL before that.
+      terminationGracePeriodSeconds: 1260
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: worker
+          image: instagram:0.0.1-SNAPSHOT
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: instagram-config
+            - secretRef:
+                name: instagram-secrets
+          env:
+            - name: VIDEO_WORKER_ENABLED
+              value: "true"
+            # One consumer per pod: pods map 1:1 to partitions, which is what KEDA's math assumes.
+            - name: VIDEO_WORKER_CONCURRENCY
+              value: "1"
+            - name: VIDEO_WORKER_SHUTDOWN_TIMEOUT
+              value: "20m"
+            - name: SHUTDOWN_TIMEOUT
+              value: "20m"
+            - name: TRANSCODING_WORK_DIR
+              value: /work
+          ports:
+            - name: http
+              containerPort: 8081
+          # Requests are what the scheduler reserves. When KEDA asks for 100 pods and the nodes are full, pods stay
+          # Pending: a node autoscaler (Cluster Autoscaler / Karpenter) must add nodes. KEDA only scales pods.
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+              ephemeral-storage: 4Gi
+            # No CPU limit: ffmpeg would be throttled; it may use idle cores on the node.
+            limits:
+              memory: 3Gi
+              ephemeral-storage: 8Gi
+          volumeMounts:
+            - name: work
+              mountPath: /work
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 10
+      volumes:
+        # Original (up to 1 GB) + renditions of the job in hand; emptied after each job.
+        - name: work
+          emptyDir:
+            sizeLimit: 8Gi

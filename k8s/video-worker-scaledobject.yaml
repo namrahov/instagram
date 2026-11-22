@@ -1,0 +1,64 @@
+# Section 5: scale video workers on Kafka consumer lag, not on CPU.
+#
+# Why lag: the backlog is what users feel (videos waiting to become READY). CPU says nothing about it: 10 busy
+# workers show the same CPU whether 10 or 100,000 videos are waiting.
+#
+# How KEDA computes replicas (Kafka scaler, roughly):
+#   desired = ceil(total lag of group "video-processors" on topic "video-processing" / lagThreshold)
+#   clamped to [minReplicaCount, maxReplicaCount] and, with allowIdleConsumers=false, to the partition count.
+# KEDA feeds this to an HPA it creates and owns (do not set replicas on the Deployment).
+#
+# Example: 100 partitions, lagThreshold 5, sudden 100,000 uploads → desired = 20,000 → clamped to 100 pods.
+# Each pod is one consumer (VIDEO_WORKER_CONCURRENCY=1) on one partition. Going past 100 needs more partitions
+# or a separate job queue (section 6).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: video-worker
+  namespace: instagram
+spec:
+  scaleTargetRef:
+    name: video-worker
+  # How often KEDA reads the lag.
+  pollingInterval: 15
+  # Always-on baseline, as in the design; uploads never wait for a cold start.
+  minReplicaCount: 10
+  # = partitions of video-processing. More pods than partitions would get no partition and idle.
+  maxReplicaCount: 100
+  # If KEDA cannot read the lag (Kafka unreachable), hold this many replicas instead of guessing.
+  fallback:
+    failureThreshold: 3
+    replicas: 10
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        # Spikes: double the pods every 30 s, no waiting.
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 30
+        # Calm down slowly: lag drops to 0 between bursts, and every removed pod is a rebalance plus a
+        # graceful stop of the job in hand (up to 20 min, see video-worker.yaml).
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          policies:
+            - type: Pods
+              value: 5
+              periodSeconds: 120
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka.kafka.svc.cluster.local:9092
+        consumerGroup: video-processors
+        topic: video-processing
+        # Target waiting videos per pod. A job takes ~2 min, so 5 ≈ at most ~10 min of queue per pod before KEDA
+        # adds pods. (The design's example uses 100, which would let each pod fall ~3 hours behind first.)
+        lagThreshold: "5"
+        # Scale above minReplicaCount as soon as anything waits.
+        activationLagThreshold: "0"
+        # A brand-new group with no committed offsets: count everything in the topic as lag.
+        offsetResetPolicy: earliest
+        # Never ask for more pods than partitions.
+        allowIdleConsumers: "false"
