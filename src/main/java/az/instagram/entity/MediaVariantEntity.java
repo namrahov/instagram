@@ -12,8 +12,8 @@ import jakarta.persistence.IdClass;
 import jakarta.persistence.Table;
 
 /**
- * One rendition of a video (e.g. 720p) and the work on it. Read through JPA; claimed, extended and completed with
- * conditional SQL in VariantLeaseRepository, because those steps must be atomic.
+ * One rendition of one version of a video (e.g. v2, 720p) and the work on it. Read through JPA; claimed, extended
+ * and completed with conditional SQL in VariantLeaseRepository, because those steps must be atomic.
  */
 @Entity
 @Table(name = "media_variants")
@@ -23,6 +23,11 @@ public class MediaVariantEntity {
     @Id
     @Column(name = "media_id")
     private Long mediaId;
+
+    /** Which processing run of the video this rendition belongs to (section 8). */
+    @Id
+    @Column(name = "version")
+    private Integer version;
 
     @Id
     @Column(name = "resolution")
@@ -46,7 +51,7 @@ public class MediaVariantEntity {
     @Column(nullable = false)
     private Long generation;
 
-    /** Set when COMPLETED. */
+    /** Set when COMPLETED: the rendition's HLS playlist (index.m3u8), its segments next to it. */
     @Column(name = "object_key")
     private String objectKey;
 
@@ -56,8 +61,17 @@ public class MediaVariantEntity {
     @Column
     private Integer height;
 
+    /** All segments together. */
     @Column(name = "size_bytes")
     private Long sizeBytes;
+
+    /** Bits per second of the busiest segment: BANDWIDTH in the master playlist. */
+    @Column(name = "peak_bitrate")
+    private Long peakBitrate;
+
+    /** Bits per second over the whole video: AVERAGE-BANDWIDTH in the master playlist. */
+    @Column(name = "avg_bitrate")
+    private Long avgBitrate;
 
     @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
     private Instant createdAt;
@@ -70,6 +84,10 @@ public class MediaVariantEntity {
 
     public Long getMediaId() {
         return mediaId;
+    }
+
+    public Integer getVersion() {
+        return version;
     }
 
     public String getResolution() {
@@ -112,9 +130,17 @@ public class MediaVariantEntity {
         return sizeBytes;
     }
 
-    public record Key(Long mediaId, String resolution) implements Serializable {
+    public Long getPeakBitrate() {
+        return peakBitrate;
+    }
+
+    public Long getAvgBitrate() {
+        return avgBitrate;
+    }
+
+    public record Key(Long mediaId, Integer version, String resolution) implements Serializable {
         public Key() {
-            this(null, null);
+            this(null, null, null);
         }
     }
 }

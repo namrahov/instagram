@@ -9,6 +9,7 @@ import az.instagram.dto.response.UploadProgressResponse;
 import az.instagram.entity.MediaEntity;
 import az.instagram.security.CurrentUser;
 import az.instagram.service.MediaUploadService;
+import az.instagram.service.VideoProcessingService;
 
 import java.util.List;
 
@@ -26,9 +27,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class MediaController {
 
     private final MediaUploadService uploads;
+    private final VideoProcessingService processing;
 
-    public MediaController(MediaUploadService uploads) {
+    public MediaController(MediaUploadService uploads, VideoProcessingService processing) {
         this.uploads = uploads;
+        this.processing = processing;
     }
 
     /**
@@ -77,7 +80,19 @@ public class MediaController {
         return toResponse(uploads.getOwned(currentUserId, id));
     }
 
+    /**
+     * Section 8: produce the video again as a new version (v2, v3, ...) next to the current one. The current
+     * playbackUrl keeps working until the new version is READY; then playbackUrl switches to the new path.
+     * 409 while a version is still being produced. Owner only.
+     */
+    @PostMapping("/media/{id}/reprocess")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public MediaResponse reprocess(@CurrentUser long currentUserId, @PathVariable long id) {
+        return toResponse(processing.requestReprocessing(currentUserId, id));
+    }
+
     private MediaResponse toResponse(MediaEntity media) {
-        return MediaResponse.from(media, uploads.downloadUrl(media).orElse(null), uploads.variants(media));
+        return MediaResponse.from(media, uploads.downloadUrl(media).orElse(null),
+                uploads.playbackUrl(media).orElse(null), uploads.variants(media));
     }
 }

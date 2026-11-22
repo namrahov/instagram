@@ -1,5 +1,6 @@
 package az.instagram.service;
 
+import az.instagram.config.CdnProperties;
 import az.instagram.config.MediaProperties;
 import az.instagram.dto.event.VideoProcessingRequestedEvent;
 import az.instagram.entity.MediaEntity;
@@ -14,6 +15,7 @@ import az.instagram.storage.ObjectStorage;
 import az.instagram.storage.ObjectStorage.PresignedUpload;
 import az.instagram.storage.ObjectStorage.StoredObject;
 import az.instagram.storage.ObjectStorage.UploadedPart;
+import az.instagram.transcoding.HlsPlaylists;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -61,15 +63,18 @@ public class MediaUploadService {
     private final OutboxService outbox;
     private final TransactionTemplate tx;
     private final MediaProperties props;
+    private final CdnProperties cdn;
 
     public MediaUploadService(MediaRepository media, MediaVariantRepository variants, ObjectStorage storage,
-                              OutboxService outbox, TransactionTemplate tx, MediaProperties props) {
+                              OutboxService outbox, TransactionTemplate tx, MediaProperties props,
+                              CdnProperties cdn) {
         this.media = media;
         this.variants = variants;
         this.storage = storage;
         this.outbox = outbox;
         this.tx = tx;
         this.props = props;
+        this.cdn = cdn;
     }
 
     public InitiatedUpload initiate(long userId, String contentType, long sizeBytes) {
@@ -248,14 +253,27 @@ public class MediaUploadService {
         return Optional.of(storage.presignGet(entity.getObjectKey(), props.downloadUrlTtl()));
     }
 
-    /** Transcoded renditions of a READY video, smallest first, each with a short-lived read URL. */
-    public List<VariantView> variants(MediaEntity entity) {
-        if (entity.getMediaType() != MediaType.VIDEO || entity.getStatus() != MediaStatus.READY) {
+    /** Renditions of the version clients play, smallest first. Empty until a version is READY. */
+    public List<MediaVariantEntity> variants(MediaEntity entity) {
+        if (entity.getMediaType() != MediaType.VIDEO || entity.getActiveVersion() == null) {
             return List.of();
         }
-        return variants.findByMediaIdAndStatusOrderByShortSide(entity.getId(), VariantStatus.COMPLETED).stream()
-                .map(v -> new VariantView(v, storage.presignGet(v.getObjectKey(), props.downloadUrlTtl())))
-                .toList();
+        return variants.findByMediaIdAndVersionAndStatusOrderByShortSide(entity.getId(), entity.getActiveVersion(),
+                VariantStatus.COMPLETED);
+    }
+
+    /**
+     * Section 8: the HLS master playlist of the active version, through the CDN. Plain, stable URL: the files are
+     * immutable, so every viewer of this video shares the same cached copies at the edge. A new version (reprocess)
+     * is a new URL. Stays the old one while a new version is being produced, so playback never breaks.
+     */
+    public Optional<String> playbackUrl(MediaEntity entity) {
+        if (entity.getMediaType() != MediaType.VIDEO || entity.getActiveVersion() == null) {
+            return Optional.empty();
+        }
+        String base = cdn.baseUrl().toString().replaceAll("/+$", "");
+        return Optional.of(base + "/" + VideoProcessingService.versionPrefix(entity.getId(), entity.getActiveVersion())
+                + HlsPlaylists.MASTER_PLAYLIST);
     }
 
     /**
@@ -390,8 +408,5 @@ public class MediaUploadService {
     }
 
     public record UploadProgress(MediaEntity media, List<UploadedPart> uploadedParts, List<Integer> missingParts) {
-    }
-
-    public record VariantView(MediaVariantEntity variant, String url) {
     }
 }

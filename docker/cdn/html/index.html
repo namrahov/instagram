@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HLS test player</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; max-width: 900px; }
+    input { width: 100%; padding: 6px; font-family: monospace; }
+    video { width: 100%; background: #000; margin-top: 12px; }
+    #log { font-family: monospace; font-size: 13px; white-space: pre-wrap; background: #f4f4f4; padding: 8px; }
+  </style>
+</head>
+<body>
+<h3>HLS test player</h3>
+<p>Paste a <code>playbackUrl</code> from <code>GET /media/{id}</code> (or open <code>/?src=...</code>).</p>
+<form id="form"><input id="src" placeholder="http://localhost:8090/videos/1/v1/master.m3u8"></form>
+<video id="video" controls muted></video>
+<div id="log"></div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<script>
+  const video = document.getElementById('video');
+  const input = document.getElementById('src');
+  const log = (msg) => { document.getElementById('log').textContent += msg + '\n'; };
+  let hls;
+
+  function play(src) {
+    if (hls) hls.destroy();
+    document.getElementById('log').textContent = '';
+    if (!Hls.isSupported()) { video.src = src; log('Native HLS'); return; }
+    hls = new Hls();
+    hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      log('Renditions: ' + data.levels.map(l => l.height + 'p @ ' + Math.round(l.bitrate / 1000) + ' kbps').join(', '));
+      video.play();
+    });
+    // Adaptive bitrate: the player switches rendition by measured bandwidth.
+    hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
+      const l = hls.levels[data.level];
+      log('Playing ' + l.height + 'p (estimated bandwidth ' + Math.round(hls.bandwidthEstimate / 1000) + ' kbps)');
+    });
+    hls.on(Hls.Events.ERROR, (_, data) => log('Error: ' + data.details));
+    hls.loadSource(src);
+    hls.attachMedia(video);
+  }
+
+  document.getElementById('form').addEventListener('submit', (e) => { e.preventDefault(); play(input.value.trim()); });
+  const initial = new URLSearchParams(location.search).get('src');
+  if (initial) { input.value = initial; play(initial); }
+</script>
+</body>
+</html>
