@@ -78,6 +78,6 @@ public class MediaController {
     }
 
     private MediaResponse toResponse(MediaEntity media) {
-        return MediaResponse.from(media, uploads.downloadUrl(media).orElse(null));
+        return MediaResponse.from(media, uploads.downloadUrl(media).orElse(null), uploads.variants(media));
     }
 }

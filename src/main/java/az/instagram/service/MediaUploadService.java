@@ -1,11 +1,14 @@
 package az.instagram.service;
 
 import az.instagram.config.MediaProperties;
+import az.instagram.dto.event.VideoProcessingRequestedEvent;
 import az.instagram.entity.MediaEntity;
 import az.instagram.entity.MediaFormat;
 import az.instagram.entity.MediaStatus;
 import az.instagram.entity.MediaType;
+import az.instagram.entity.MediaVariantEntity;
 import az.instagram.repository.MediaRepository;
+import az.instagram.repository.MediaVariantRepository;
 import az.instagram.storage.ObjectStorage;
 import az.instagram.storage.ObjectStorage.PresignedUpload;
 import az.instagram.storage.ObjectStorage.StoredObject;
@@ -26,6 +29,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Limit;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
@@ -51,12 +55,19 @@ public class MediaUploadService {
     private static final int MAX_PARTS = 10_000;
 
     private final MediaRepository media;
+    private final MediaVariantRepository variants;
     private final ObjectStorage storage;
+    private final OutboxService outbox;
+    private final TransactionTemplate tx;
     private final MediaProperties props;
 
-    public MediaUploadService(MediaRepository media, ObjectStorage storage, MediaProperties props) {
+    public MediaUploadService(MediaRepository media, MediaVariantRepository variants, ObjectStorage storage,
+                              OutboxService outbox, TransactionTemplate tx, MediaProperties props) {
         this.media = media;
+        this.variants = variants;
         this.storage = storage;
+        this.outbox = outbox;
+        this.tx = tx;
         this.props = props;
     }
 
@@ -126,13 +137,16 @@ public class MediaUploadService {
     }
 
     /**
-     * Idempotent: calling it again after success returns the same UPLOADED media.
+     * Verifies the upload. An image becomes READY. A video becomes UPLOADED and, in the same transaction,
+     * a VideoProcessingRequested event is written to the outbox (section 4): either both commit or neither.
+     * <p>
+     * Idempotent: calling it again after success returns the same media.
      * Safe to call twice at once, or together with abort/cleanup: conditional UPDATEs let only one of them win.
      */
     public MediaEntity complete(long userId, long mediaId) {
         MediaEntity entity = getOwned(userId, mediaId);
         switch (entity.getStatus()) {
-            case UPLOADED -> {
+            case UPLOADED, PROCESSING, READY, FAILED -> {
                 return entity;
             }
             case REJECTED -> throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -165,9 +179,8 @@ public class MediaUploadService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT, "Upload rejected: " + mismatch);
         }
 
-        media.markUploaded(mediaId, object.sizeBytes(), object.etag(), Instant.now(),
-                MediaStatus.PENDING_UPLOAD, MediaStatus.UPLOADED);
-        // Re-read: if a parallel complete won the race, this still returns its UPLOADED row.
+        markVerified(entity, object);
+        // Re-read: if a parallel complete won the race, this still returns its verified row.
         MediaEntity result = getOwned(userId, mediaId);
         if (result.getStatus() == MediaStatus.ABORTED || result.getStatus() == MediaStatus.EXPIRED) {
             // Abort/cleanup won the race while we were joining parts: do not leave the object behind.
@@ -226,12 +239,41 @@ public class MediaUploadService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Media not found"));
     }
 
-    /** Short-lived read URL, only for verified uploads. */
+    /** Short-lived read URL of the original file, only for verified uploads. */
     public Optional<String> downloadUrl(MediaEntity entity) {
-        if (entity.getStatus() != MediaStatus.UPLOADED) {
+        if (!entity.getStatus().isVerified()) {
             return Optional.empty();
         }
         return Optional.of(storage.presignGet(entity.getObjectKey(), props.downloadUrlTtl()));
+    }
+
+    /** Transcoded renditions of a READY video, smallest first, each with a short-lived read URL. */
+    public List<VariantView> variants(MediaEntity entity) {
+        if (entity.getMediaType() != MediaType.VIDEO || entity.getStatus() != MediaStatus.READY) {
+            return List.of();
+        }
+        return variants.findByMediaIdOrderByHeight(entity.getId()).stream()
+                .map(v -> new VariantView(v, storage.presignGet(v.getObjectKey(), props.downloadUrlTtl())))
+                .toList();
+    }
+
+    /**
+     * The status change and the outbox event in one transaction. Without it, a crash between the two would leave
+     * an UPLOADED video that no worker ever hears about (or an event for an upload that did not happen).
+     */
+    private void markVerified(MediaEntity entity, StoredObject object) {
+        boolean video = entity.getMediaType() == MediaType.VIDEO;
+        tx.executeWithoutResult(status -> {
+            int changed = media.markVerified(entity.getId(), object.sizeBytes(), object.etag(), Instant.now(),
+                    MediaStatus.PENDING_UPLOAD, video ? MediaStatus.UPLOADED : MediaStatus.READY);
+            if (changed == 1 && video) {
+                var event = new VideoProcessingRequestedEvent(UUID.randomUUID(), entity.getId(), entity.getUserId(),
+                        Instant.now());
+                // Keyed by media id: all events of one video land in one partition, handled in order.
+                outbox.append(event.eventId(), VideoProcessingRequestedEvent.TYPE, entity.getId(),
+                        String.valueOf(entity.getId()), event);
+            }
+        });
     }
 
     /** Turns the uploaded parts into one object, unless an earlier complete call already did. */
@@ -347,5 +389,8 @@ public class MediaUploadService {
     }
 
     public record UploadProgress(MediaEntity media, List<UploadedPart> uploadedParts, List<Integer> missingParts) {
+    }
+
+    public record VariantView(MediaVariantEntity variant, String url) {
     }
 }

@@ -24,6 +24,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-liquibase'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'org.springframework.boot:spring-boot-starter-kafka'
 	// S3 API client; talks to MinIO locally and to AWS S3 in production without code changes.
 	implementation platform('software.amazon.awssdk:bom:2.59.7')
 	implementation 'software.amazon.awssdk:s3'

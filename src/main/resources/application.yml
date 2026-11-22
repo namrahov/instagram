@@ -16,6 +16,18 @@ spring:
   mvc:
     problemdetails:
       enabled: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # Wait for all in-sync replicas; idempotence stops broker-side duplicates on producer retries.
+      acks: all
+      properties:
+        enable.idempotence: true
+        # send() blocks up to this long when the broker is unreachable (default 60 s) while outbox rows are claimed.
+        max.block.ms: 5000
+    consumer:
+      # A new consumer group starts from the beginning, so no event published before it existed is skipped.
+      auto-offset-reset: earliest
 
 server:
   # 8080 is taken by the twitter app.
@@ -58,3 +70,12 @@ instagram:
       interval: ${MEDIA_CLEANUP_INTERVAL:PT10M}
       grace: ${MEDIA_CLEANUP_GRACE:1h}
       batch-size: ${MEDIA_CLEANUP_BATCH_SIZE:100}
+  transcoding:
+    # ffmpeg/ffprobe on PATH by default; set full paths if they are not.
+    ffmpeg-path: ${FFMPEG_PATH:ffmpeg}
+    ffprobe-path: ${FFPROBE_PATH:ffprobe}
+    work-dir: ${TRANSCODING_WORK_DIR:${java.io.tmpdir}/instagram-transcoding}
+    # Short side of each rendition. Heights above the source are skipped (no upscaling).
+    heights: 360,720,1080
+    # One ffmpeg run is killed after this long.
+    timeout: ${TRANSCODING_TIMEOUT:20m}

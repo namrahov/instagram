@@ -2,6 +2,7 @@ package az.instagram.storage;
 
 import az.instagram.config.StorageProperties;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -13,6 +14,8 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.awscore.presigner.PresignedRequest;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.core.sync.ResponseTransformer;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
@@ -135,6 +138,15 @@ public class ObjectStorage {
 
     public void delete(String key) {
         s3.deleteObject(d -> d.bucket(bucket).key(key));
+    }
+
+    /** Streams the object to a local file (which must not exist yet). Used by workers, not by the API. */
+    public void download(String key, Path target) {
+        s3.getObject(g -> g.bucket(bucket).key(key), ResponseTransformer.toFile(target));
+    }
+
+    public void upload(String key, Path source, String contentType) {
+        s3.putObject(p -> p.bucket(bucket).key(key).contentType(contentType), RequestBody.fromFile(source));
     }
 
     private static String stripQuotes(String etag) {
