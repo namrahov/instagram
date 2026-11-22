@@ -99,3 +99,10 @@ instagram:
     heights: 360,720,1080
     # One ffmpeg run is killed after this long.
     timeout: ${TRANSCODING_TIMEOUT:20m}
+    # Section 7. A claimed rendition is ours for lease-duration; the heartbeat extends it every heartbeat-interval
+    # while ffmpeg runs. A dead worker's rendition can be claimed again once its lease runs out.
+    lease-duration: ${TRANSCODING_LEASE_DURATION:5m}
+    heartbeat-interval: ${TRANSCODING_HEARTBEAT_INTERVAL:90s}
+    # Sweeper: re-queues videos whose worker lease ran out more than sweeper-grace ago (ISO-8601 interval).
+    sweeper-interval: ${TRANSCODING_SWEEPER_INTERVAL:PT1M}
+    sweeper-grace: ${TRANSCODING_SWEEPER_GRACE:1m}
