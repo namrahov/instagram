@@ -1,0 +1,17 @@
+# kubectl apply -k k8s     (needs KEDA installed in the cluster, see k8s/README.md)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: instagram
+resources:
+  - config.yaml
+  - api.yaml
+  - video-worker.yaml
+  - video-worker-scaledobject.yaml
+# Secrets are read from k8s/.env, which git ignores. Copy k8s/.env.example to k8s/.env and fill it in.
+secretGenerator:
+  - name: instagram-secrets
+    envs:
+      - .env
+generatorOptions:
+  # Fixed name, so envFrom.secretRef can refer to it without kustomize's hash suffix.
+  disableNameSuffixHash: true

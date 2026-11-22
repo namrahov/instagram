@@ -26,12 +26,16 @@ public class VideoProcessingWorker {
     }
 
     /**
-     * concurrency = partitions: more consumers than partitions in one group would sit idle (section 5).
+     * autoStartup: off on API pods, on on video-worker pods (k8s/video-worker.yaml), so KEDA scales only workers.
+     * concurrency: consumers in this pod. Locally one pod reads all partitions (3). On Kubernetes it is 1, so
+     * KEDA's "replicas ≤ partitions" rule maps one pod to one partition (section 5). More consumers than
+     * partitions in one group would sit idle.
      * max.poll.interval.ms: Kafka assumes a consumer is dead if it does not poll for this long; one job (all
      * renditions) must fit in it, or the partition is handed to another worker mid-job.
      */
     @KafkaListener(topics = KafkaConfig.VIDEO_PROCESSING_TOPIC, groupId = KafkaConfig.VIDEO_PROCESSORS_GROUP,
-            concurrency = "" + KafkaConfig.VIDEO_PROCESSING_PARTITIONS,
+            autoStartup = "${instagram.video-worker.enabled:true}",
+            concurrency = "${instagram.video-worker.concurrency:3}",
             properties = {"max.poll.records=1", "max.poll.interval.ms=3600000"})
     public void onVideoProcessingRequested(ConsumerRecord<String, String> record) {
         var event = json.readValue(record.value(), VideoProcessingRequestedEvent.class);

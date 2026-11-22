@@ -4,13 +4,18 @@ import az.instagram.dto.event.VideoProcessingRequestedEvent;
 import az.instagram.exception.InvalidVideoException;
 import az.instagram.service.VideoProcessingService;
 
+import java.time.Duration;
+
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.ContainerCustomizer;
 import org.springframework.kafka.config.TopicBuilder;
+import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
@@ -31,12 +36,6 @@ public class KafkaConfig {
 
     public static final String DLT_SUFFIX = ".DLT";
 
-    /**
-     * Partitions cap how many consumers of one group read in parallel (section 5). 3 is enough locally;
-     * production would use far more.
-     */
-    public static final int VIDEO_PROCESSING_PARTITIONS = 3;
-
     public static String topicFor(String eventType) {
         return switch (eventType) {
             case VideoProcessingRequestedEvent.TYPE -> VIDEO_PROCESSING_TOPIC;
@@ -48,17 +47,35 @@ public class KafkaConfig {
         return topic + DLT_SUFFIX;
     }
 
-    /** Created on startup by KafkaAdmin if missing. */
+    /**
+     * Created on startup by KafkaAdmin if missing; if it exists with fewer partitions, they are added.
+     * Partitions cap how many consumers of one group read in parallel, so they cap KEDA's useful replica count
+     * (section 5). Partitions can be added but never removed, and adding them re-maps keys to partitions.
+     */
     @Bean
-    public NewTopic videoProcessingTopic() {
-        return TopicBuilder.name(VIDEO_PROCESSING_TOPIC).partitions(VIDEO_PROCESSING_PARTITIONS).replicas(1).build();
+    public NewTopic videoProcessingTopic(@Value("${instagram.kafka.video-processing.partitions}") int partitions,
+                                         @Value("${instagram.kafka.video-processing.replicas}") short replicas) {
+        return TopicBuilder.name(VIDEO_PROCESSING_TOPIC).partitions(partitions).replicas(replicas).build();
+    }
+
+    /**
+     * Graceful stop for long jobs. When a pod is stopped (KEDA scale-down, rolling update), the listener container
+     * waits up to this long for the job in hand to finish and its offset to be committed. Spring Kafka's default
+     * is 10 s; a transcode takes minutes, so without this most scale-downs would cut a job and another pod would
+     * redo it (only the unfinished renditions, but still wasted work).
+     */
+    @Bean
+    public ContainerCustomizer<Object, Object, ConcurrentMessageListenerContainer<Object, Object>> gracefulWorkerShutdown(
+            @Value("${instagram.video-worker.shutdown-timeout}") Duration timeout) {
+        log.info("Kafka listener shutdown timeout: {}", timeout);
+        return container -> container.getContainerProperties().setShutdownTimeout(timeout.toMillis());
     }
 
     /** Same partition count: a dead letter keeps its original partition. */
     @Bean
-    public NewTopic videoProcessingDltTopic() {
-        return TopicBuilder.name(dltOf(VIDEO_PROCESSING_TOPIC)).partitions(VIDEO_PROCESSING_PARTITIONS).replicas(1)
-                .build();
+    public NewTopic videoProcessingDltTopic(@Value("${instagram.kafka.video-processing.partitions}") int partitions,
+                                            @Value("${instagram.kafka.video-processing.replicas}") short replicas) {
+        return TopicBuilder.name(dltOf(VIDEO_PROCESSING_TOPIC)).partitions(partitions).replicas(replicas).build();
     }
 
     /**
