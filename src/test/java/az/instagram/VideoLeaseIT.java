@@ -12,6 +12,7 @@ import az.instagram.repository.MediaRepository;
 import az.instagram.repository.MediaVariantRepository;
 import az.instagram.repository.VariantLeaseRepository;
 import az.instagram.repository.VariantLeaseRepository.Lease;
+import az.instagram.repository.VariantLeaseRepository.Rendition;
 import az.instagram.repository.VariantLeaseRepository.Target;
 import az.instagram.service.VideoProcessingService;
 import az.instagram.storage.ObjectStorage;
@@ -114,17 +115,22 @@ class VideoLeaseIT {
             assertThat(v.getStatus()).isEqualTo(VariantStatus.COMPLETED);
             assertThat(v.getGeneration()).isEqualTo(1);
         });
-        assertThat(storage.listKeys("videos/" + id + "/")).containsExactlyInAnyOrder(
-                "videos/" + id + "/360p/g1.mp4", "videos/" + id + "/720p/g1.mp4");
+        // One HLS directory per rendition (generation 1) plus the master playlist; nothing else.
+        String v1 = "videos/" + id + "/v1/";
+        assertThat(rows.get("360p").getObjectKey()).isEqualTo(v1 + "360p/g1/index.m3u8");
+        assertThat(rows.get("720p").getObjectKey()).isEqualTo(v1 + "720p/g1/index.m3u8");
+        assertThat(storage.listKeys("videos/" + id + "/")).contains(v1 + "master.m3u8")
+                .allSatisfy(key -> assertThat(key).matches(java.util.regex.Pattern.quote(v1)
+                        + "(master\\.m3u8|(360p|720p)/g1/(index\\.m3u8|seg_\\d{5}\\.ts))"));
     }
 
     @Test
     void staleWorkerCannotPublishAfterItsLeaseWasTakenOver() {
         long id = uploadedVideo();
-        leases.createPending(id, List.of(new Target("360p", 360), new Target("720p", 720)));
+        leases.createPending(id, 1, List.of(new Target("360p", 360), new Target("720p", 720)));
 
         // The zombie claims 360p (generation 1) and then hangs: its lease runs out.
-        Lease zombie = leases.claimNext(id, "zombie", LEASE).orElseThrow();
+        Lease zombie = leases.claimNext(id, 1, "zombie", LEASE).orElseThrow();
         assertThat(zombie.resolution()).isEqualTo("360p");
         expireLeases(id);
 
@@ -133,18 +139,19 @@ class VideoLeaseIT {
         assertThat(status(id)).isEqualTo(MediaStatus.READY);
         MediaVariantEntity p360 = rows(id).get("360p");
         assertThat(p360.getGeneration()).isEqualTo(2);
-        assertThat(p360.getObjectKey()).isEqualTo("videos/" + id + "/360p/g2.mp4");
+        assertThat(p360.getObjectKey()).isEqualTo("videos/" + id + "/v1/360p/g2/index.m3u8");
 
         // The zombie wakes up and tries to publish its result: fenced off, nothing changes.
-        assertThat(leases.complete(zombie, "videos/" + id + "/360p/g1.mp4", 640, 360, 1)).isFalse();
+        var stale = new Rendition("videos/" + id + "/v1/360p/g1/index.m3u8", 640, 360, 1, 1, 1);
+        assertThat(leases.complete(zombie, stale)).isFalse();
         assertThat(leases.extend(zombie, LEASE)).as("heartbeat of a fenced-off worker").isFalse();
-        assertThat(rows(id).get("360p").getObjectKey()).isEqualTo("videos/" + id + "/360p/g2.mp4");
+        assertThat(rows(id).get("360p").getObjectKey()).isEqualTo("videos/" + id + "/v1/360p/g2/index.m3u8");
     }
 
     @Test
     void heartbeatNoticesTheLostLeaseAndStopsFfmpeg() throws Exception {
         long id = uploadedVideo();
-        leases.createPending(id, List.of(new Target("720p", 720)));
+        leases.createPending(id, 1, List.of(new Target("720p", 720)));
 
         CompletableFuture<Void> job = CompletableFuture.runAsync(() -> processing.process(id));
         // Wait until the worker holds the lease and ffmpeg has started, then take the rendition away from it.
@@ -153,7 +160,7 @@ class VideoLeaseIT {
         jdbc.sql("""
                         UPDATE media_variants SET generation = generation + 1, locked_by = 'thief',
                                                   lease_until = now() + interval '1 hour'
-                        WHERE media_id = :id AND resolution = '720p'
+                        WHERE media_id = :id AND version = 1 AND resolution = '720p'
                         """)
                 .param("id", id).update();
         Instant stolen = Instant.now();
@@ -176,8 +183,8 @@ class VideoLeaseIT {
     void sweeperRequeuesAVideoWhoseWorkerDied() {
         long id = uploadedVideo();
         media.startProcessing(id);
-        leases.createPending(id, List.of(new Target("360p", 360)));
-        leases.claimNext(id, "dead-worker", LEASE).orElseThrow();
+        leases.createPending(id, 1, List.of(new Target("360p", 360)));
+        leases.claimNext(id, 1, "dead-worker", LEASE).orElseThrow();
         expireLeases(id);
 
         assertThat(processing.requeueExpiredLeases()).isGreaterThanOrEqualTo(1);

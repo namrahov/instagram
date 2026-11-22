@@ -10,7 +10,11 @@ import org.springframework.data.jpa.repository.JpaRepository;
 /** Reads only. All state changes go through {@link VariantLeaseRepository}. */
 public interface MediaVariantRepository extends JpaRepository<MediaVariantEntity, MediaVariantEntity.Key> {
 
+    /** Every version. */
     List<MediaVariantEntity> findByMediaIdOrderByShortSide(long mediaId);
 
-    List<MediaVariantEntity> findByMediaIdAndStatusOrderByShortSide(long mediaId, VariantStatus status);
+    List<MediaVariantEntity> findByMediaIdAndVersionOrderByShortSide(long mediaId, int version);
+
+    List<MediaVariantEntity> findByMediaIdAndVersionAndStatusOrderByShortSide(long mediaId, int version,
+                                                                              VariantStatus status);
 }

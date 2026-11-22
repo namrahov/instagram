@@ -79,6 +79,14 @@ public class MediaEntity {
     @Column(name = "part_count", updatable = false)
     private Integer partCount;
 
+    /** Video: the version being produced (or last produced). Each reprocessing run gets a new one (section 8). */
+    @Column(name = "target_version", nullable = false)
+    private Integer targetVersion = 1;
+
+    /** Video: the version clients play (videos/{id}/v{n}/master.m3u8). Null until the first version is READY. */
+    @Column(name = "active_version")
+    private Integer activeVersion;
+
     protected MediaEntity() {
     }
 
@@ -120,6 +128,14 @@ public class MediaEntity {
 
     public Instant getProcessedAt() {
         return processedAt;
+    }
+
+    public Integer getTargetVersion() {
+        return targetVersion;
+    }
+
+    public Integer getActiveVersion() {
+        return activeVersion;
     }
 
     public String getUploadId() {

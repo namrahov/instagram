@@ -2,6 +2,7 @@ package az.instagram.storage;
 
 import az.instagram.config.StorageProperties;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
@@ -19,6 +20,7 @@ import software.amazon.awssdk.core.sync.ResponseTransformer;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
 import software.amazon.awssdk.services.s3.model.Part;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
@@ -154,6 +156,31 @@ public class ObjectStorage {
 
     public void upload(String key, Path source, String contentType) {
         s3.putObject(p -> p.bucket(bucket).key(key).contentType(contentType), RequestBody.fromFile(source));
+    }
+
+    /**
+     * Upload with a Cache-Control header that storage returns on every GET. The CDN caches by it, so it must be
+     * true for the object's whole life ("immutable" only for keys whose content never changes).
+     */
+    public void upload(String key, Path source, String contentType, String cacheControl) {
+        s3.putObject(p -> p.bucket(bucket).key(key).contentType(contentType).cacheControl(cacheControl),
+                RequestBody.fromFile(source));
+    }
+
+    public void upload(String key, String text, String contentType, String cacheControl) {
+        s3.putObject(p -> p.bucket(bucket).key(key).contentType(contentType).cacheControl(cacheControl),
+                RequestBody.fromString(text, StandardCharsets.UTF_8));
+    }
+
+    /** Deletes every object under {@code prefix}, one page of up to 1000 keys per request. */
+    public void deletePrefix(String prefix) {
+        List<String> keys = listKeys(prefix);
+        for (int from = 0; from < keys.size(); from += 1000) {
+            List<ObjectIdentifier> page = keys.subList(from, Math.min(keys.size(), from + 1000)).stream()
+                    .map(k -> ObjectIdentifier.builder().key(k).build())
+                    .toList();
+            s3.deleteObjects(d -> d.bucket(bucket).delete(del -> del.objects(page).quiet(true)));
+        }
     }
 
     private static String stripQuotes(String etag) {

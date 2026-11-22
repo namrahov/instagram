@@ -20,3 +20,5 @@ data:
   # What mobile clients reach; presigned URLs are signed for this host.
   MINIO_PUBLIC_ENDPOINT: https://media.example.com
   MINIO_BUCKET: instagram-media
+  # playbackUrl host: the CDN whose origin is the bucket's videos/ prefix (section 8).
+  CDN_BASE_URL: https://cdn.example.com

@@ -55,30 +55,79 @@ public class FfmpegTranscoder {
     }
 
     /**
-     * Writes an H.264/AAC MP4 whose shorter side is {@code shortSide} pixels ("720p" means 720 on the short side, so
-     * a portrait video stays portrait). {@code +faststart} puts the index first so playback can start before the
-     * whole file is downloaded.
+     * Writes one HLS rendition into {@code outDir} (section 8): {@code index.m3u8} plus {@value #SEGMENT_SECONDS}-second
+     * H.264/AAC segments, shorter side {@code shortSide} pixels ("720p" means 720 on the short side, so a portrait
+     * video stays portrait).
+     * <p>
+     * A keyframe is forced every {@value #SEGMENT_SECONDS} seconds (and none on scene cuts), so every rendition is cut
+     * at the same timestamps and the player can switch quality at any segment boundary. CRF keeps quality even;
+     * maxrate caps the bitrate, so a rendition really fits the bandwidth the master playlist promises.
      *
      * @param keepGoing checked every second while ffmpeg runs; when it turns false (the lease was lost) ffmpeg is
      *                  killed and {@link LeaseLostException} is thrown, so a fenced-off worker stops burning CPU
+     * @return the media playlist
      */
-    public void transcode(Path source, Path target, int shortSide, BooleanSupplier keepGoing) {
+    public Path transcodeHls(Path source, Path outDir, int shortSide, BooleanSupplier keepGoing) {
+        try {
+            Files.createDirectories(outDir);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
         String scale = "scale='if(gt(iw,ih),-2,%1$d)':'if(gt(iw,ih),%1$d,-2)'".formatted(shortSide);
+        int maxKbps = maxBitrateKbps(shortSide);
+        // Runs inside outDir with relative names, so the playlist refers to its segments as "seg_00000.ts".
         run(List.of(props.ffmpegPath(), "-y", "-hide_banner", "-loglevel", "error",
                         "-i", source.toString(),
                         "-vf", scale,
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-                        "-c:a", "aac", "-b:a", "128k",
-                        "-movflags", "+faststart",
-                        target.toString()),
-                target.resolveSibling(target.getFileName() + ".log"), false, keepGoing);
+                        "-maxrate", maxKbps + "k", "-bufsize", 2 * maxKbps + "k",
+                        "-force_key_frames", "expr:gte(t,n_forced*" + SEGMENT_SECONDS + ")", "-sc_threshold", "0",
+                        "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+                        "-f", "hls", "-hls_time", String.valueOf(SEGMENT_SECONDS), "-hls_playlist_type", "vod",
+                        "-hls_flags", "independent_segments", "-hls_segment_type", "mpegts",
+                        "-hls_segment_filename", "seg_%05d.ts",
+                        HlsPlaylists.MEDIA_PLAYLIST),
+                outDir, outDir.resolveSibling(outDir.getFileName() + ".log"), false, keepGoing);
+        return outDir.resolve(HlsPlaylists.MEDIA_PLAYLIST);
+    }
+
+    /** Segment length: 4 s is a common VOD choice (quick start and quick quality switches, not too many files). */
+    static final int SEGMENT_SECONDS = 4;
+
+    /** Upper bound of the video bitrate per rendition, roughly the usual H.264 ladder. */
+    static int maxBitrateKbps(int shortSide) {
+        if (shortSide <= 240) {
+            return 400;
+        }
+        if (shortSide <= 360) {
+            return 900;
+        }
+        if (shortSide <= 480) {
+            return 1_500;
+        }
+        if (shortSide <= 720) {
+            return 3_000;
+        }
+        if (shortSide <= 1080) {
+            return 5_500;
+        }
+        return 12_000;
+    }
+
+    private String run(List<String> command, Path log, boolean invalidInputOnFailure, BooleanSupplier keepGoing) {
+        return run(command, null, log, invalidInputOnFailure, keepGoing);
     }
 
     /** Runs a command, returns its stdout. Output goes to a file, so a chatty process can never block on a full pipe. */
-    private String run(List<String> command, Path log, boolean invalidInputOnFailure, BooleanSupplier keepGoing) {
+    private String run(List<String> command, Path directory, Path log, boolean invalidInputOnFailure,
+                       BooleanSupplier keepGoing) {
         Process process;
         try {
-            process = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile()).start();
+            ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(log.toFile());
+            if (directory != null) {
+                builder.directory(directory.toFile());
+            }
+            process = builder.start();
         } catch (IOException e) {
             throw new UncheckedIOException("Cannot start " + command.getFirst(), e);
         }

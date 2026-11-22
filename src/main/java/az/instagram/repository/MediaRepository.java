@@ -48,15 +48,37 @@ public interface MediaRepository extends JpaRepository<MediaEntity, Long> {
             """)
     int startProcessing(@Param("id") long id);
 
-    /** PROCESSING → READY. */
+    /**
+     * PROCESSING → READY, and {@code version} becomes the one clients play. Only for the version being produced:
+     * a late worker of an older version cannot switch playback back to it.
+     */
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update MediaEntity m
-               set m.status = az.instagram.entity.MediaStatus.READY, m.processedAt = :at
+               set m.status = az.instagram.entity.MediaStatus.READY, m.activeVersion = :version, m.processedAt = :at
              where m.id = :id and m.status = az.instagram.entity.MediaStatus.PROCESSING
+               and m.targetVersion = :version
             """)
-    int markReady(@Param("id") long id, @Param("at") Instant at);
+    int markReady(@Param("id") long id, @Param("version") int version, @Param("at") Instant at);
+
+    /**
+     * READY/FAILED → UPLOADED with the next version, so the worker produces a new set of files next to the old ones.
+     * The active version keeps playing meanwhile. Not while a version is being produced: one job per video at a time.
+     *
+     * @return 0 if the video is not the user's, not a video, or still uploading/processing
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update MediaEntity m
+               set m.status = az.instagram.entity.MediaStatus.UPLOADED, m.targetVersion = m.targetVersion + 1,
+                   m.failureReason = null, m.processedAt = null
+             where m.id = :id and m.userId = :userId
+               and m.mediaType = az.instagram.entity.MediaType.VIDEO
+               and m.status in (az.instagram.entity.MediaStatus.READY, az.instagram.entity.MediaStatus.FAILED)
+            """)
+    int requestReprocessing(@Param("id") long id, @Param("userId") long userId);
 
     /** UPLOADED/PROCESSING → FAILED, after the retries ran out. A READY video is never downgraded. */
     @Transactional
